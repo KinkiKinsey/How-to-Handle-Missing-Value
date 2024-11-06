@@ -1,0 +1,365 @@
+---
+title: "CC project"
+author: "Jingxi.Feng (ID:jf3670) & Tracy Mao (ID:jm5893)"
+date: "2024-11-05"
+output: html_document
+---
+```{r}
+library(ggplot2)
+library(tidyr) 
+library(dplyr)
+library(VIM)
+library(mice)
+```
+
+# Four Methods in here: 1.Remove NA. 2.Replace by Mean/Median/Mod. 3.KNN imputation. 4. Predictive Model 
+
+
+# Part A).
+## Let create a "fake" dataset to see how to handle missing value 
+### Assign random missing value 
+
+```{r}
+set.seed(42)
+
+df <- data.frame(
+  Numerical_1 = sample(1:100, 100, replace = TRUE),
+  Numerical_2 = sample(50:150, 100, replace = TRUE),
+  Category_1 = sample(c('A', 'B', 'C', 'D'), 100, replace = TRUE),
+  Category_2 = sample(c('X', 'Y', 'Z'), 100, replace = TRUE)
+)
+
+df_none_missing <- df
+```
+
+
+
+
+### Before moving next let see its distribution
+```{r}
+par(mfrow = c(2, 2))
+
+# Loop through each column of the dataframe
+for (col_name in names(df)) {
+  
+  if (is.numeric(df[[col_name]])) {
+    hist(df[[col_name]], 
+         main = paste("Distribution of", col_name), 
+         xlab = col_name, 
+         col = "skyblue", 
+         border = "white")
+    
+  } else {
+    barplot(table(df[[col_name]]), 
+            main = paste("Distribution of", col_name), 
+            xlab = col_name, 
+            col = "coral", 
+            border = "white")
+  }
+}
+
+par(mfrow = c(1, 1))
+```
+
+
+```{r}
+# Random choose 2 missing in num column 1
+missing_indices_num1 <- sample(1:100, 2)
+
+# Random choose 10 missing in num column 2
+missing_indices_num2 <- sample(1:100, 10)
+
+# Random choose 25 missing in cat column 1
+missing_indices_cat1 <- sample(1:100, 25)
+
+# Random choose 5 missing in cat column 2
+missing_indices_cat2 <- sample(1:100, 5)
+
+
+# Assign the missing value to the previous select columns
+df$Numerical_1[missing_indices_num1] <- NA
+df$Numerical_2[missing_indices_num2] <- NA
+df$Category_1[missing_indices_cat1] <- NA
+df$Category_2[missing_indices_cat2] <- NA
+
+
+```
+
+
+### Visualize the missing values
+```{r}
+
+## These just all preprocessing
+
+df_missing <- df %>%
+  mutate(across(everything(), as.character)) %>%  # Convert all columns to character
+  mutate(row_id = row_number()) %>%
+  pivot_longer(cols = -row_id, names_to = "variable", values_to = "value")
+
+# Mark missing values
+df_missing <- df_missing %>%
+  mutate(is_missing = is.na(value))
+
+# Plot the missing values
+ggplot(df_missing, aes(x = variable, y = row_id, fill = is_missing)) +
+  geom_tile(color = "white") +
+  scale_fill_manual(values = c("FALSE" = "blue", "TRUE" = "red")) +
+  labs(title = "Missing Values Heatmap",
+       x = "Variables",
+       y = "Row Number",
+       fill = "Missing") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+# B). We could start our work for handling missing value 
+
+
+## 1.a). Remove the missing value by row 
+```{r}
+
+df_clean_remove_rows <- na.omit(df)
+head(df_clean_remove_rows)
+
+```
+
+## 1.b). visualize after method 1 
+```{r}
+par(mfrow = c(2, 4))  
+
+for (col_name in names(df_none_missing)) {
+  
+  # Plot original distribution
+  if (is.numeric(df_none_missing[[col_name]])) {
+    hist(df_none_missing[[col_name]], 
+         main = paste("Original", col_name), 
+         xlab = col_name, 
+         col = "skyblue", 
+         border = "white")
+    
+  } else {
+    barplot(table(df_none_missing[[col_name]]), 
+            main = paste("Original", col_name), 
+            xlab = col_name, 
+            col = "coral", 
+            border = "white")
+  }
+  
+  # Plot modified distribution after removing rows with missing values
+  if (is.numeric(df_clean_remove_rows[[col_name]])) {
+    hist(df_clean_remove_rows[[col_name]], 
+         main = paste("Removed rows", col_name), 
+         xlab = col_name, 
+         col = "lightgreen", 
+         border = "white")
+    
+  } else {
+    barplot(table(df_clean_remove_rows[[col_name]]), 
+            main = paste("Removed rows", col_name), 
+            xlab = col_name, 
+            col = "lightpink", 
+            border = "white")
+  }
+}
+
+# Reset plotting area to default
+par(mfrow = c(1, 1))
+
+## Notice the scale of new one now become smaller 
+
+```
+
+
+
+## 2.a). Mutate missing with Mean, Median,or Mode
+
+```{r}
+# 1. Mean Imputation for Numerical_1
+df_mean_impute <- df |>
+  mutate(Numerical_1 = ifelse(is.na(Numerical_1), 
+                              mean(Numerical_1, na.rm = TRUE), 
+                              Numerical_1))
+
+# 2. Median Imputation for Numerical_2
+df_median_impute <- df_mean_impute |>
+  mutate(Numerical_2 = ifelse(is.na(Numerical_2), 
+                              median(Numerical_2, na.rm = TRUE), 
+                              Numerical_2))
+
+# 3. Mode Imputation for Categorical Variables
+mode_imputation <- function(x) {
+  ux <- unique(x)
+  ux <- ux[!is.na(ux)]  # Exclude NA from the unique values
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+df_mode_impute <- df_median_impute |>
+  mutate(Category_1 = ifelse(is.na(Category_1), 
+                             mode_imputation(Category_1), 
+                             Category_1),
+         Category_2 = ifelse(is.na(Category_2), 
+                             mode_imputation(Category_2), 
+                             Category_2))
+```
+
+
+
+
+
+## 2.b). Visualize the method 2
+```{r}
+
+
+# New plots with comparison
+par(mfrow = c(2, 4))  # Set up a 2x4 grid for side-by-side comparison
+
+for (col_name in names(df)) {
+  
+  # Plot original distribution
+  if (is.numeric(df_none_missing[[col_name]])) {
+    hist(df_none_missing[[col_name]], 
+         main = paste("Original", col_name), 
+         xlab = col_name, 
+         col = "skyblue", 
+         border = "white")
+    
+  } else {
+    barplot(table(df_none_missing[[col_name]]), 
+            main = paste("Original", col_name), 
+            xlab = col_name, 
+            col = "coral", 
+            border = "white")
+  }
+  
+  # Plot modified distribution
+  if (is.numeric(df_mode_impute[[col_name]])) {
+    hist(df_mode_impute[[col_name]], 
+         main = paste("Mean/Median", col_name), 
+         xlab = col_name, 
+         col = "lightgreen", 
+         border = "white")
+    
+  } else {
+    barplot(table(df_mode_impute[[col_name]]), 
+            main = paste("Mode", col_name), 
+            xlab = col_name, 
+            col = "lightpink", 
+            border = "white")
+  }
+}
+
+# Reset plotting area to default
+par(mfrow = c(1, 1))
+
+
+## Notice now the one would have more "normal" and center-clustering 
+```
+
+
+
+## 3.a) Using KNN to replace the Missing by refering the "near" data point 
+```{r}
+
+
+df_knn_impute <- kNN(df, k = 5, imp_var = FALSE)
+head(df_knn_impute)
+
+```
+
+## 3.b) Visualize from method 3
+```{r}
+par(mfrow = c(2, 4))  
+
+for (col_name in names(df)) {
+  
+  # Plot original distribution
+  if (is.numeric(df_none_missing[[col_name]])) {
+    hist(df_none_missing[[col_name]], 
+         main = paste("Original", col_name), 
+         xlab = col_name, 
+         col = "skyblue", 
+         border = "white")
+    
+  } else {
+    barplot(table(df_none_missing[[col_name]]), 
+            main = paste("Original", col_name), 
+            xlab = col_name, 
+            col = "coral", 
+            border = "white")
+  }
+  
+  # Plot modified distribution after KNN imputation
+  if (is.numeric(df_knn_impute[[col_name]])) {
+    hist(df_knn_impute[[col_name]], 
+         main = paste("KNN Imputed", col_name), 
+         xlab = col_name, 
+         col = "lightgreen", 
+         border = "white")
+    
+  } else {
+    barplot(table(df_knn_impute[[col_name]]), 
+            main = paste("KNN Imputed", col_name), 
+            xlab = col_name, 
+            col = "lightpink", 
+            border = "white")
+  }
+}
+
+
+par(mfrow = c(1, 1))
+
+
+
+## Notice in here, the KNN is create a more "close" to true/orignial data when missing is small
+## And even missing is large, it does not necessary different so much from the true one
+```
+
+
+## 4.a). Predictive Model to handle missing value 
+```{r}
+# Step 1: Copy the original dataset
+
+# Step 1: Load or create your dataset
+  # Load a dataset named 'df' which contains missing values
+# Step 2: Convert categorical columns to factors
+  # Ensure categorical columns are recognized as factors for appropriate handling during imputation
+# Step 3: Define the imputation methods for each column
+  # Specify imputation methods for each column:
+  # 'pmm' (Predictive Mean Matching) for numerical columns
+  # 'polyreg' (Polytomous Logistic Regression) for categorical columns
+# Step 4: Apply MICE to the dataset
+  # Impute missing values using the MICE package
+# Step 5: Extract the completed dataset
+  # Retrieve the imputed dataset from the MICE object
+
+
+# Use mice function
+
+ 
+
+
+# df <- your_dataset  
+
+#df$Category_1 <- as.factor(df$Category_1)  # Convert 'Category_1' to a factor
+
+#df$Category_2 <- as.factor(df$Category_2)  # Convert 'Category_2' to a factor
+
+# methods <- c("pmm", "pmm", "polyreg", "polyreg") 
+
+# mice_imputed <- mice(df, m = 1, method = methods, seed = 42)
+
+
+# df_imputed <- complete(mice_imputed)
+
+
+
+```
+
+
+
+
+
+
+
+
